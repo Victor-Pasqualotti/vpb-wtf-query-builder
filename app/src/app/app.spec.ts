@@ -84,12 +84,85 @@ describe('App (Athena Visual Query Builder)', () => {
     expect(app.sqlPreview).toContain('LIMIT 100');
   });
 
-  it('should prevent generating payload if no columns are selected', () => {
+  it('should support creating a ROW_NUMBER calculated column with PARTITION BY and ORDER BY', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance;
+    fixture.detectChanges();
+
+    app.calcType = 'row_number';
+    app.rowNumAlias = 'posicao_compra';
+    app.rowNumPartitionBy = ['cliente_id'];
+    app.rowNumOrderCol = 'data_compra';
+    app.rowNumOrderDir = 'DESC';
+
+    app.addCalculatedColumn();
+    expect(app.calculatedColumns.length).toBe(1);
+    expect(app.calculatedColumns[0].tipo).toBe('row_number');
+
+    app.generatePayload();
+    expect(app.generatedPayload?.colunas_calculadas?.length).toBe(1);
+    expect(app.sqlPreview).toContain('ROW_NUMBER() OVER (PARTITION BY cliente_id ORDER BY data_compra DESC) AS "posicao_compra"');
+  });
+
+  it('should support creating an AGGREGATE calculated column, requiring GROUP BY and enabling HAVING', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance;
+    fixture.detectChanges();
+
+    // Select standard grouping columns
+    app.selectedColumns = ['cliente_id', 'canal_venda'];
+
+    app.calcType = 'agregacao';
+    app.aggFunc = 'sum';
+    app.aggCol = 'valor_total';
+    app.aggAlias = 'faturamento_total';
+
+    app.addCalculatedColumn();
+    expect(app.calculatedColumns.length).toBe(1);
+    expect(app.hasAggregations).toBe(true);
+    expect(app.havingConfig.fields['faturamento_total']).toBeDefined();
+
+    // Set a rule in HAVING
+    app.havingQuery = {
+      condition: 'and',
+      rules: [
+        { field: 'faturamento_total', operator: '>', value: 500 }
+      ]
+    };
+
+    app.generatePayload();
+    expect(app.generatedPayload?.group_by).toEqual(['cliente_id', 'canal_venda']);
+    expect(app.generatedPayload?.having).toBeDefined();
+    expect(app.sqlPreview).toContain('SUM(valor_total) AS "faturamento_total"');
+    expect(app.sqlPreview).toContain('GROUP BY\n  cliente_id, canal_venda');
+    expect(app.sqlPreview).toContain('HAVING\n  faturamento_total > 500');
+  });
+
+  it('should support creating a MATH / EXPRESSION calculated column (+, -, =)', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance;
+    fixture.detectChanges();
+
+    app.calcType = 'operacao';
+    app.mathOp = '-';
+    app.mathCol1 = 'valor_total';
+    app.mathCol2 = 'quantidade_itens';
+    app.mathAlias = 'diferenca_metrica';
+
+    app.addCalculatedColumn();
+    expect(app.calculatedColumns.length).toBe(1);
+
+    app.generatePayload();
+    expect(app.sqlPreview).toContain('(valor_total - quantidade_itens) AS "diferenca_metrica"');
+  });
+
+  it('should prevent generating payload if no columns and no calculated columns are selected', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance;
     fixture.detectChanges();
 
     app.clearAllColumns();
+    app.calculatedColumns = [];
     app.generatePayload();
 
     expect(app.generatedPayload).toBeNull();

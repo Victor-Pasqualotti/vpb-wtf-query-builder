@@ -1,6 +1,6 @@
 import { Injectable } from '@angular/core';
 import { Rule, RuleSet } from 'angular2-query-builder';
-import { QueryPayload } from '../models/query-builder.model';
+import { CalculatedColumn, QueryPayload } from '../models/query-builder.model';
 
 @Injectable({
   providedIn: 'root'
@@ -8,16 +8,33 @@ import { QueryPayload } from '../models/query-builder.model';
 export class SqlPreviewService {
   /**
    * Generates a Trino/Athena SQL preview from the QueryPayload.
-   * Note: The frontend produces the JSON payload, which the AWS Lambda backend
-   * validates and compiles into SQL securely before execution.
+   * Note: The frontend produces the JSON payload (AST), which the AWS Lambda backend
+   * validates and compiles into SQL securely before execution on AWS Athena.
    */
   generateSql(payload: QueryPayload): string {
-    const columnsPart = payload.colunas && payload.colunas.length > 0
-      ? payload.colunas.map((c) => `  ${c}`).join(',\n')
+    const projectionParts: string[] = [];
+
+    // Regular selected columns
+    if (payload.colunas && payload.colunas.length > 0) {
+      for (const col of payload.colunas) {
+        projectionParts.push(`  ${col}`);
+      }
+    }
+
+    // Calculated columns
+    if (payload.colunas_calculadas && payload.colunas_calculadas.length > 0) {
+      for (const calc of payload.colunas_calculadas) {
+        projectionParts.push(`  ${this.formatCalculatedColumn(calc)}`);
+      }
+    }
+
+    const selectClause = projectionParts.length > 0
+      ? projectionParts.join(',\n')
       : '  *';
 
     const fromPart = payload.tabela || 'tabela_indefinida';
 
+    // WHERE clause
     let whereClause = '';
     if (payload.filtros && payload.filtros.rules && payload.filtros.rules.length > 0) {
       const condition = this.parseRuleSet(payload.filtros);
@@ -26,9 +43,71 @@ export class SqlPreviewService {
       }
     }
 
+    // GROUP BY clause (required when aggregate calculated columns are present)
+    let groupByClause = '';
+    if (payload.group_by && payload.group_by.length > 0) {
+      groupByClause = `\nGROUP BY\n  ${payload.group_by.join(', ')}`;
+    }
+
+    // HAVING clause (enabled when aggregations are present)
+    let havingClause = '';
+    if (payload.having && payload.having.rules && payload.having.rules.length > 0) {
+      const havingCondition = this.parseRuleSet(payload.having);
+      if (havingCondition) {
+        havingClause = `\nHAVING\n  ${havingCondition}`;
+      }
+    }
+
     const limitPart = payload.limite ? `\nLIMIT ${payload.limite}` : '\nLIMIT 100';
 
-    return `SELECT\n${columnsPart}\nFROM\n  ${fromPart}${whereClause}${limitPart};`;
+    return `SELECT\n${selectClause}\nFROM\n  ${fromPart}${whereClause}${groupByClause}${havingClause}${limitPart};`;
+  }
+
+  private formatCalculatedColumn(calc: CalculatedColumn): string {
+    switch (calc.tipo) {
+      case 'row_number': {
+        const partition = calc.partition_by && calc.partition_by.length > 0
+          ? `PARTITION BY ${calc.partition_by.join(', ')} `
+          : '';
+        const orderCol = calc.order_by ? calc.order_by.coluna : '1';
+        const orderDir = calc.order_by ? calc.order_by.direcao : 'ASC';
+        const order = `ORDER BY ${orderCol} ${orderDir}`;
+        return `ROW_NUMBER() OVER (${partition}${order}) AS "${this.escapeAlias(calc.alias)}"`;
+      }
+
+      case 'agregacao': {
+        const colName = calc.colunas && calc.colunas.length > 0 ? calc.colunas[0] : '*';
+        switch (calc.funcao) {
+          case 'max':
+            return `MAX(${colName}) AS "${this.escapeAlias(calc.alias)}"`;
+          case 'min':
+            return `MIN(${colName}) AS "${this.escapeAlias(calc.alias)}"`;
+          case 'sum':
+            return `SUM(${colName}) AS "${this.escapeAlias(calc.alias)}"`;
+          case 'avg':
+            return `AVG(${colName}) AS "${this.escapeAlias(calc.alias)}"`;
+          case 'count':
+            return `COUNT(${colName}) AS "${this.escapeAlias(calc.alias)}"`;
+          case 'count_distinct':
+            return `COUNT(DISTINCT ${colName}) AS "${this.escapeAlias(calc.alias)}"`;
+          case 'concat':
+            return `CONCAT(${calc.colunas.join(', ')}) AS "${this.escapeAlias(calc.alias)}"`;
+          default:
+            return `${String(calc.funcao).toUpperCase()}(${colName}) AS "${this.escapeAlias(calc.alias)}"`;
+        }
+      }
+
+      case 'operacao': {
+        if (!calc.colunas || calc.colunas.length < 2) {
+          return `(${calc.colunas?.[0] || '0'}) AS "${this.escapeAlias(calc.alias)}"`;
+        }
+        const opStr = ` ${calc.operador} `;
+        return `(${calc.colunas.join(opStr)}) AS "${this.escapeAlias(calc.alias)}"`;
+      }
+
+      default:
+        return `NULL AS "${this.escapeAlias((calc as any).alias || 'calc')}"`;
+    }
   }
 
   private parseRuleSet(ruleSet: RuleSet): string {
@@ -110,5 +189,9 @@ export class SqlPreviewService {
 
   private escapeSql(value: string): string {
     return value.replace(/'/g, "''");
+  }
+
+  private escapeAlias(alias: string): string {
+    return alias.replace(/"/g, '""');
   }
 }

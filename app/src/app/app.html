@@ -90,6 +90,9 @@
               <span class="count-badge" [class.count-empty]="selectedColumns.length === 0">
                 {{ selectedColumns.length }} de {{ availableColumns.length }} colunas selecionadas
               </span>
+              <span *ngIf="hasAggregations" class="badge-group-by-active">
+                ⚡ GROUP BY Ativo nas colunas selecionadas
+              </span>
             </div>
             <div class="toolbar-actions">
               <button type="button" class="btn-sm btn-ghost" (click)="selectAllColumns()">
@@ -124,6 +127,236 @@
         </div>
       </section>
 
+      <!-- 2.1 COLUNAS CALCULADAS -->
+      <section class="section-block calc-section">
+        <div class="section-header">
+          <div class="section-number special-number">2.1</div>
+          <div class="section-title-wrap">
+            <div class="badge-title-group">
+              <h2 class="section-title">Colunas Calculadas (Expressions & Window Functions)</h2>
+              <span class="badge badge-feature">Novo</span>
+            </div>
+            <p class="section-desc">
+              Adicione métricas derivadas, funções de janela (<strong>Row Number</strong> com Partition By/Order By), 
+              <strong>Agregações</strong> (Sum, Avg, Min, Max, Count, Concat) que exigem GROUP BY e habilitam HAVING, 
+              ou <strong>Operações Matemáticas</strong> (+, -, =).
+            </p>
+          </div>
+        </div>
+
+        <div class="section-body">
+          
+          <!-- Tipo de Coluna Calculada Tabs -->
+          <div class="calc-type-tabs">
+            <button 
+              type="button" 
+              class="calc-tab-btn" 
+              [class.active]="calcType === 'row_number'"
+              (click)="calcType = 'row_number'; resetCalculatedColumnForm()">
+              🔢 Row Number (Window)
+            </button>
+            <button 
+              type="button" 
+              class="calc-tab-btn" 
+              [class.active]="calcType === 'agregacao'"
+              (click)="calcType = 'agregacao'; resetCalculatedColumnForm()">
+              📊 Agregação (GROUP BY / HAVING)
+            </button>
+            <button 
+              type="button" 
+              class="calc-tab-btn" 
+              [class.active]="calcType === 'operacao'"
+              (click)="calcType = 'operacao'; resetCalculatedColumnForm()">
+              🧮 Operação Matemática (+, -, =)
+            </button>
+          </div>
+
+          <!-- Form: Row Number -->
+          <div class="calc-form-box" *ngIf="calcType === 'row_number'">
+            <div class="form-instructions">
+              <strong>Função de Janela ROW_NUMBER():</strong> Enumera sequencialmente as linhas dentro de cada partição com base na ordenação especificada.
+            </div>
+            <div class="calc-form-grid">
+              <div class="form-field">
+                <label class="form-label" for="rowNumAlias">Nome / Alias da Coluna:</label>
+                <input 
+                  id="rowNumAlias"
+                  type="text" 
+                  class="form-input" 
+                  [(ngModel)]="rowNumAlias" 
+                  placeholder="ex: num_linha" />
+              </div>
+
+              <div class="form-field">
+                <label class="form-label" for="rowNumOrderCol">Ordenar Por (ORDER BY):</label>
+                <div class="order-inputs-row">
+                  <select id="rowNumOrderCol" class="form-select" [(ngModel)]="rowNumOrderCol">
+                    <option *ngFor="let col of availableColumns" [value]="col.name">
+                      {{ col.label }} ({{ col.name }})
+                    </option>
+                  </select>
+                  <select class="form-select dir-select" [(ngModel)]="rowNumOrderDir">
+                    <option value="ASC">ASC (Crescente)</option>
+                    <option value="DESC">DESC (Decrescente)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="form-field full-width">
+                <label class="form-label">Particionar Por (PARTITION BY - Opcional):</label>
+                <div class="chips-selector">
+                  <button 
+                    type="button" 
+                    *ngFor="let col of availableColumns"
+                    class="mini-chip"
+                    [class.selected]="isPartitionBySelected(col.name)"
+                    (click)="togglePartitionBy(col.name)">
+                    <span class="chip-check" *ngIf="isPartitionBySelected(col.name)">✓</span>
+                    {{ col.label }}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Form: Agregação (GROUP BY / HAVING) -->
+          <div class="calc-form-box" *ngIf="calcType === 'agregacao'">
+            <div class="form-instructions alert-instructions">
+              <strong>Agregação com GROUP BY & HAVING:</strong> Adicionar uma agregação ativa automaticamente o agrupamento (GROUP BY) nas colunas selecionadas no SELECT e habilita a seção de filtros <strong>HAVING</strong>.
+            </div>
+            <div class="calc-form-grid">
+              <div class="form-field">
+                <label class="form-label" for="aggFunc">Função de Agregação:</label>
+                <select id="aggFunc" class="form-select" [(ngModel)]="aggFunc" (ngModelChange)="onAggFuncChange()">
+                  <option value="sum">SUM - Soma de valores</option>
+                  <option value="avg">AVG - Média aritmética</option>
+                  <option value="max">MAX - Valor máximo</option>
+                  <option value="min">MIN - Valor mínimo</option>
+                  <option value="count">COUNT - Contagem de registros</option>
+                  <option value="count_distinct">COUNT(DISTINCT) - Contagem de valores únicos</option>
+                  <option value="concat">CONCAT - Concatenação de colunas</option>
+                </select>
+              </div>
+
+              <div class="form-field" *ngIf="aggFunc !== 'concat'">
+                <label class="form-label" for="aggCol">Coluna Alvo:</label>
+                <select id="aggCol" class="form-select" [(ngModel)]="aggCol" (ngModelChange)="onAggFuncChange()">
+                  <option *ngFor="let col of availableColumns" [value]="col.name">
+                    {{ col.label }} ({{ col.name }})
+                  </option>
+                </select>
+              </div>
+
+              <div class="form-field full-width" *ngIf="aggFunc === 'concat'">
+                <label class="form-label">Selecione as Colunas para Concatenar:</label>
+                <div class="chips-selector">
+                  <button 
+                    type="button" 
+                    *ngFor="let col of availableColumns"
+                    class="mini-chip"
+                    [class.selected]="isConcatColSelected(col.name)"
+                    (click)="toggleConcatCol(col.name)">
+                    <span class="chip-check" *ngIf="isConcatColSelected(col.name)">✓</span>
+                    {{ col.label }}
+                  </button>
+                </div>
+              </div>
+
+              <div class="form-field">
+                <label class="form-label" for="aggAlias">Nome / Alias da Coluna Resultante:</label>
+                <input 
+                  id="aggAlias"
+                  type="text" 
+                  class="form-input" 
+                  [(ngModel)]="aggAlias" 
+                  placeholder="ex: total_faturamento" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Form: Operações Matemáticas -->
+          <div class="calc-form-box" *ngIf="calcType === 'operacao'">
+            <div class="form-instructions">
+              <strong>Operações Matemáticas ou de Comparação:</strong> Realiza cálculos ou comparações entre duas colunas (ex: <code>coluna_a - coluna_b</code> ou <code>coluna_a = coluna_b</code>).
+            </div>
+            <div class="calc-form-grid">
+              <div class="form-field">
+                <label class="form-label" for="mathCol1">Primeira Coluna:</label>
+                <select id="mathCol1" class="form-select" [(ngModel)]="mathCol1">
+                  <option *ngFor="let col of availableColumns" [value]="col.name">
+                    {{ col.label }} ({{ col.name }})
+                  </option>
+                </select>
+              </div>
+
+              <div class="form-field">
+                <label class="form-label" for="mathOp">Operador:</label>
+                <select id="mathOp" class="form-select op-select" [(ngModel)]="mathOp">
+                  <option value="+">+ (Soma)</option>
+                  <option value="-">- (Subtração)</option>
+                  <option value="=">= (Comparação de Igualdade)</option>
+                </select>
+              </div>
+
+              <div class="form-field">
+                <label class="form-label" for="mathCol2">Segunda Coluna:</label>
+                <select id="mathCol2" class="form-select" [(ngModel)]="mathCol2">
+                  <option *ngFor="let col of availableColumns" [value]="col.name">
+                    {{ col.label }} ({{ col.name }})
+                  </option>
+                </select>
+              </div>
+
+              <div class="form-field">
+                <label class="form-label" for="mathAlias">Nome / Alias da Coluna Resultante:</label>
+                <input 
+                  id="mathAlias"
+                  type="text" 
+                  class="form-input" 
+                  [(ngModel)]="mathAlias" 
+                  placeholder="ex: saldo_liquido" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Form Error & Submit Button -->
+          <div *ngIf="calcFormError" class="form-inline-error">
+            ⚠️ {{ calcFormError }}
+          </div>
+
+          <div class="calc-form-actions">
+            <button type="button" class="btn-sm btn-action-add" (click)="addCalculatedColumn()">
+              + Adicionar Coluna Calculada
+            </button>
+          </div>
+
+          <!-- List of Created Calculated Columns -->
+          <div class="created-calc-list" *ngIf="calculatedColumns.length > 0">
+            <h4 class="calc-list-title">Colunas Calculadas Configuradas ({{ calculatedColumns.length }}):</h4>
+            <div class="calc-items-grid">
+              <div 
+                *ngFor="let calc of calculatedColumns; let i = index" 
+                class="calc-item-card"
+                [class.calc-row-number]="calc.tipo === 'row_number'"
+                [class.calc-agregacao]="calc.tipo === 'agregacao'"
+                [class.calc-operacao]="calc.tipo === 'operacao'">
+                <div class="calc-item-header">
+                  <span class="calc-badge calc-badge-{{ calc.tipo }}">{{ calc.tipo }}</span>
+                  <span class="calc-alias">AS "{{ calc.alias }}"</span>
+                  <button type="button" class="btn-remove-calc" (click)="removeCalculatedColumn(i)" title="Remover coluna">
+                    ✕
+                  </button>
+                </div>
+                <div class="calc-formula">
+                  <code>{{ getCalculatedColumnFormula(calc) }}</code>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
       <!-- 3. FILTROS (WHERE) -->
       <section class="section-block">
         <div class="section-header">
@@ -139,6 +372,38 @@
             <query-builder 
               [config]="queryConfig" 
               [(ngModel)]="query"
+              [allowRuleset]="true"
+              [allowCollapse]="false">
+            </query-builder>
+          </div>
+        </div>
+      </section>
+
+      <!-- 3.1 FILTROS DE AGRUPAMENTO (HAVING) - Condicional se houver agregação -->
+      <section class="section-block having-section" *ngIf="hasAggregations">
+        <div class="section-header">
+          <div class="section-number special-number">3.1</div>
+          <div class="section-title-wrap">
+            <div class="badge-title-group">
+              <h2 class="section-title">Filtros de Agrupamento (HAVING)</h2>
+              <span class="badge badge-having">Habilitado por Agregação</span>
+            </div>
+            <p class="section-desc">
+              Filtre as métricas já calculadas e agrupadas após o processamento do GROUP BY (ex: <code>total_soma &gt; 1000</code>).
+            </p>
+          </div>
+        </div>
+
+        <div class="section-body">
+          <div class="having-info-pill">
+            <span>⚡ Chave do GROUP BY:</span>
+            <code *ngFor="let col of groupByColumns">{{ col }}</code>
+          </div>
+
+          <div class="query-builder-container">
+            <query-builder 
+              [config]="havingConfig" 
+              [(ngModel)]="havingQuery"
               [allowRuleset]="true"
               [allowCollapse]="false">
             </query-builder>
@@ -255,7 +520,7 @@
         </div>
 
         <div class="output-desc-bar">
-          Este objeto JSON representa a árvore de intenções da consulta (AST). Ele é enviado pela SPA para o AWS API Gateway e processado pela função Lambda em Python para gerar o SQL Trino/Athena seguro.
+          Este objeto JSON representa a árvore de intenções da consulta (AST) com suporte a colunas calculadas, GROUP BY e HAVING. Ele é enviado pela SPA para o AWS API Gateway e processado pela função Lambda em Python para gerar o SQL Trino/Athena seguro.
         </div>
 
         <!-- JSON Code View -->
