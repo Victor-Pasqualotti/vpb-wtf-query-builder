@@ -8,14 +8,25 @@ import {
   CalculatedColumn,
   CalculatedColumnType,
   ColumnDefinition,
+  JoinCondition,
+  JoinDefinition,
+  JoinType,
   MathCalculatedColumn,
   MathOperator,
   QueryPayload,
+  QueryPayloadJoin,
   RowNumberCalculatedColumn,
   TableDefinition
 } from './core/models/query-builder.model';
 import { MetadataService } from './core/services/metadata.service';
 import { SqlPreviewService } from './core/services/sql-preview.service';
+
+export interface TableColumnGroup {
+  table: TableDefinition;
+  isBase: boolean;
+  joinType?: JoinType;
+  columns: Array<ColumnDefinition & { qualifiedName: string }>;
+}
 
 @Component({
   selector: 'app-root',
@@ -28,6 +39,14 @@ export class App implements OnInit {
   // 1. Origem dos Dados (FROM)
   public tables: TableDefinition[] = [];
   public selectedTableId = 'vendas_2023';
+
+  // 1.1 Configuração de JOINs
+  public wantsJoins = false;
+  public activeJoins: JoinDefinition[] = [];
+  public selectedJoinTableId = '';
+  public selectedJoinType: JoinType = 'LEFT JOIN';
+  public currentJoinConditions: JoinCondition[] = [];
+  public joinFormError = '';
 
   // 2. Colunas (SELECT)
   public availableColumns: ColumnDefinition[] = [];
@@ -83,6 +102,12 @@ export class App implements OnInit {
   public copySqlFeedback = false;
   public validationError = '';
 
+  public activeTableIds: string[] = [];
+  public availableJoinTables: TableDefinition[] = [];
+  public activeTableGroups: TableColumnGroup[] = [];
+  public allActiveColumns: Array<ColumnDefinition & { qualifiedName: string }> = [];
+  public numericColumns: Array<ColumnDefinition & { qualifiedName: string }> = [];
+
   constructor(
     private readonly metadataService: MetadataService,
     private readonly sqlPreviewService: SqlPreviewService
@@ -97,16 +122,60 @@ export class App implements OnInit {
     return this.metadataService.getTableById(this.selectedTableId);
   }
 
-  get numericColumns(): ColumnDefinition[] {
-    return this.availableColumns.filter((c) => c.type === 'number');
-  }
-
   get hasAggregations(): boolean {
     return this.calculatedColumns.some((c) => c.tipo === 'agregacao');
   }
 
   get groupByColumns(): string[] {
     return this.hasAggregations ? [...this.selectedColumns] : [];
+  }
+
+  /**
+   * Atualiza as estruturas cacheadas de tabelas e colunas para evitar novas alocações em ciclos de detecção
+   */
+  public refreshActiveTableStructures(): void {
+    const joined = this.activeJoins.map((j) => j.tabelaDestino);
+    this.activeTableIds = [this.selectedTableId, ...joined];
+    this.availableJoinTables = this.metadataService.getAvailableJoinTables(this.selectedTableId, joined);
+
+    const groups: TableColumnGroup[] = [];
+    const baseTable = this.metadataService.getTableById(this.selectedTableId);
+    const hasMultiple = this.activeTableIds.length > 1;
+
+    if (baseTable) {
+      groups.push({
+        table: baseTable,
+        isBase: true,
+        columns: baseTable.columns.map((c) => ({
+          ...c,
+          qualifiedName: hasMultiple ? `${baseTable.id}.${c.name}` : c.name
+        }))
+      });
+    }
+
+    for (const join of this.activeJoins) {
+      const joinTbl = this.metadataService.getTableById(join.tabelaDestino);
+      if (joinTbl) {
+        groups.push({
+          table: joinTbl,
+          isBase: false,
+          joinType: join.tipo,
+          columns: joinTbl.columns.map((c) => ({
+            ...c,
+            qualifiedName: `${joinTbl.id}.${c.name}`
+          }))
+        });
+      }
+    }
+
+    this.activeTableGroups = groups;
+
+    const all: Array<ColumnDefinition & { qualifiedName: string }> = [];
+    for (const group of groups) {
+      all.push(...group.columns);
+    }
+    this.allActiveColumns = all;
+    this.numericColumns = all.filter((c) => c.type === 'number');
   }
 
   /**
@@ -120,37 +189,13 @@ export class App implements OnInit {
       return;
     }
 
-    this.availableColumns = table.columns;
-
-    // Seleciona as colunas principais por padrão (ou primeiras 4)
-    if (isInitial) {
-      this.selectedColumns = ['cliente_id', 'valor_total', 'data_compra', 'canal_venda'];
-    } else {
-      this.selectedColumns = table.columns.slice(0, 4).map((c) => c.name);
-    }
-
-    // Reseta colunas calculadas ao mudar de tabela
+    // Reseta joins e colunas calculadas ao mudar a tabela base
+    this.wantsJoins = false;
+    this.activeJoins = [];
     this.calculatedColumns = [];
-    this.resetCalculatedColumnForm();
 
-    // Atualiza dinamicamente a configuração do query-builder (WHERE)
-    this.queryConfig = this.metadataService.getQueryBuilderConfig(tableId);
-
-    // Reseta/inicializa a árvore de regras com uma regra inicial relevante
-    const firstCol = table.columns[0];
-    this.query = {
-      condition: 'and',
-      rules: [
-        {
-          field: firstCol.name,
-          operator: firstCol.type === 'number' ? '>=' : '=',
-          value: firstCol.type === 'number' ? 0 : ''
-        }
-      ]
-    };
-
-    // Atualiza HAVING config
-    this.updateHavingConfig();
+    this.refreshAvailableColumnsAndConfig(isInitial);
+    this.initJoinForm();
 
     this.validationError = '';
     if (this.generatedPayload) {
@@ -159,29 +204,256 @@ export class App implements OnInit {
   }
 
   /**
-   * Alterna a seleção de uma coluna específica
+   * Atualiza a lista de colunas disponíveis e a configuração do QueryBuilder (WHERE)
    */
-  public toggleColumn(columnName: string): void {
-    const index = this.selectedColumns.indexOf(columnName);
+  private refreshAvailableColumnsAndConfig(isInitial = false): void {
+    this.refreshActiveTableStructures();
+    const hasMultiple = this.activeTableIds.length > 1;
+    const baseTable = this.metadataService.getTableById(this.selectedTableId);
+
+    if (!baseTable) return;
+
+    this.availableColumns = baseTable.columns;
+
+    // Se é a inicialização sem joins, seleciona colunas da tabela base
+    if (isInitial) {
+      this.selectedColumns = ['cliente_id', 'valor_total', 'data_compra', 'canal_venda'];
+    } else if (!hasMultiple) {
+      this.selectedColumns = baseTable.columns.slice(0, 4).map((c) => c.name);
+    }
+
+    // Atualiza a configuração do QueryBuilder para suportar múltiplas tabelas com entidades
+    this.queryConfig = this.metadataService.getMultiTableQueryBuilderConfig(this.activeTableIds);
+
+    // Ajusta o primeiro filtro padrão
+    const firstCol = this.allActiveColumns[0];
+    if (firstCol) {
+      this.query = {
+        condition: 'and',
+        rules: [
+          {
+            field: firstCol.qualifiedName,
+            operator: firstCol.type === 'number' ? '>=' : '=',
+            value: firstCol.type === 'number' ? 0 : ''
+          }
+        ]
+      };
+    }
+
+    this.updateHavingConfig();
+    this.resetCalculatedColumnForm();
+  }
+
+  /* ========================================================
+   * MÉTODOS DE CONFIGURAÇÃO DE JOINS
+   * ======================================================== */
+
+  public onWantsJoinsChange(wants: boolean): void {
+    this.wantsJoins = wants;
+    if (!wants) {
+      this.activeJoins = [];
+      // Remove colunas pertencentes a outras tabelas
+      this.selectedColumns = this.selectedColumns.filter((col) => !col.includes('.') || col.startsWith(`${this.selectedTableId}.`));
+      this.refreshAvailableColumnsAndConfig(false);
+      if (this.generatedPayload) {
+        this.generatePayload();
+      }
+    } else {
+      this.initJoinForm();
+    }
+  }
+
+  public initJoinForm(): void {
+    this.refreshActiveTableStructures();
+    this.joinFormError = '';
+    const available = this.availableJoinTables;
+    if (available.length > 0) {
+      this.selectedJoinTableId = available[0].id;
+      this.selectedJoinType = 'LEFT JOIN';
+      this.setupDefaultJoinConditions();
+    } else {
+      this.selectedJoinTableId = '';
+      this.currentJoinConditions = [];
+    }
+  }
+
+  public onJoinTargetTableChange(): void {
+    this.setupDefaultJoinConditions();
+  }
+
+  private setupDefaultJoinConditions(): void {
+    if (!this.selectedJoinTableId) {
+      this.currentJoinConditions = [];
+      return;
+    }
+
+    // Tenta encontrar uma chave comum com a tabela base ou tabelas já ativas
+    const common = this.metadataService.getCommonJoinKeys(this.selectedTableId, this.selectedJoinTableId);
+    this.currentJoinConditions = [
+      {
+        colunaOrigem: common.colA,
+        operador: '=',
+        colunaDestino: common.colB
+      }
+    ];
+  }
+
+  public addJoinCondition(): void {
+    const baseTable = this.metadataService.getTableById(this.selectedTableId);
+    const targetTable = this.metadataService.getTableById(this.selectedJoinTableId);
+
+    const defaultOrigem = baseTable ? `${baseTable.id}.${baseTable.columns[0]?.name}` : '';
+    const defaultDestino = targetTable ? `${targetTable.id}.${targetTable.columns[0]?.name}` : '';
+
+    this.currentJoinConditions.push({
+      colunaOrigem: defaultOrigem,
+      operador: '=',
+      colunaDestino: defaultDestino
+    });
+  }
+
+  public removeJoinCondition(index: number): void {
+    if (this.currentJoinConditions.length > 1) {
+      this.currentJoinConditions.splice(index, 1);
+    }
+  }
+
+  public getColumnsForTable(tableId: string): ColumnDefinition[] {
+    const tbl = this.metadataService.getTableById(tableId);
+    return tbl ? tbl.columns : [];
+  }
+
+  public addJoin(): void {
+    this.joinFormError = '';
+
+    if (!this.selectedJoinTableId) {
+      this.joinFormError = 'Selecione uma tabela para realizar o JOIN.';
+      return;
+    }
+
+    if (this.currentJoinConditions.length === 0) {
+      this.joinFormError = 'Adicione ao menos uma condição de junção (ON).';
+      return;
+    }
+
+    for (const cond of this.currentJoinConditions) {
+      if (!cond.colunaOrigem || !cond.colunaDestino) {
+        this.joinFormError = 'Preencha as colunas de origem e destino em todas as condições ON.';
+        return;
+      }
+    }
+
+    const newJoin: JoinDefinition = {
+      id: `${this.selectedJoinType}_${this.selectedJoinTableId}_${Date.now()}`,
+      tipo: this.selectedJoinType,
+      tabelaOrigem: this.selectedTableId,
+      tabelaDestino: this.selectedJoinTableId,
+      condicoes: JSON.parse(JSON.stringify(this.currentJoinConditions))
+    };
+
+    this.activeJoins.push(newJoin);
+
+    // Se antes havia apenas 1 tabela, converte as colunas já selecionadas para o formato qualificado
+    if (this.activeJoins.length === 1) {
+      this.selectedColumns = this.selectedColumns.map((c) => c.includes('.') ? c : `${this.selectedTableId}.${c}`);
+    }
+
+    // Adiciona por conveniência as 2 primeiras colunas da tabela que foi joined
+    const joinedTbl = this.metadataService.getTableById(this.selectedJoinTableId);
+    if (joinedTbl) {
+      for (const col of joinedTbl.columns.slice(0, 2)) {
+        const qName = `${joinedTbl.id}.${col.name}`;
+        if (!this.selectedColumns.includes(qName)) {
+          this.selectedColumns.push(qName);
+        }
+      }
+    }
+
+    // Atualiza a configuração global com a nova tabela ativa
+    this.refreshAvailableColumnsAndConfig(false);
+    this.initJoinForm();
+
+    if (this.generatedPayload) {
+      this.generatePayload();
+    }
+  }
+
+  public removeJoin(index: number): void {
+    const removed = this.activeJoins[index];
+    this.activeJoins.splice(index, 1);
+
+    if (removed) {
+      // Remove colunas selecionadas da tabela removida
+      this.selectedColumns = this.selectedColumns.filter((col) => !col.startsWith(`${removed.tabelaDestino}.`));
+
+      // Remove colunas calculadas que faziam referência à tabela removida
+      this.calculatedColumns = this.calculatedColumns.filter((calc) => {
+        if (calc.tipo === 'agregacao' && calc.colunas.some((c) => c.startsWith(`${removed.tabelaDestino}.`))) {
+          return false;
+        }
+        if (calc.tipo === 'operacao' && calc.colunas.some((c) => c.startsWith(`${removed.tabelaDestino}.`))) {
+          return false;
+        }
+        if (calc.tipo === 'row_number' && calc.order_by?.coluna?.startsWith(`${removed.tabelaDestino}.`)) {
+          return false;
+        }
+        return true;
+      });
+    }
+
+    // Se restou apenas a tabela base, volta nomes para formato simples
+    if (this.activeJoins.length === 0) {
+      this.selectedColumns = this.selectedColumns.map((c) => c.replace(`${this.selectedTableId}.`, ''));
+    }
+
+    this.refreshAvailableColumnsAndConfig(false);
+    this.initJoinForm();
+
+    if (this.generatedPayload) {
+      this.generatePayload();
+    }
+  }
+
+  /* ========================================================
+   * MÉTODOS DE SELEÇÃO DE COLUNAS
+   * ======================================================== */
+
+  public toggleColumn(columnIdentifier: string): void {
+    const index = this.selectedColumns.indexOf(columnIdentifier);
     if (index > -1) {
       this.selectedColumns.splice(index, 1);
     } else {
-      this.selectedColumns.push(columnName);
+      this.selectedColumns.push(columnIdentifier);
     }
     this.updateHavingConfig();
   }
 
-  public isColumnSelected(columnName: string): boolean {
-    return this.selectedColumns.includes(columnName);
+  public isColumnSelected(columnIdentifier: string): boolean {
+    return this.selectedColumns.includes(columnIdentifier);
   }
 
   public selectAllColumns(): void {
-    this.selectedColumns = this.availableColumns.map((c) => c.name);
+    this.selectedColumns = this.allActiveColumns.map((c) => c.qualifiedName);
     this.updateHavingConfig();
   }
 
   public clearAllColumns(): void {
     this.selectedColumns = [];
+    this.updateHavingConfig();
+  }
+
+  public selectAllTableColumns(group: TableColumnGroup): void {
+    for (const col of group.columns) {
+      if (!this.selectedColumns.includes(col.qualifiedName)) {
+        this.selectedColumns.push(col.qualifiedName);
+      }
+    }
+    this.updateHavingConfig();
+  }
+
+  public clearTableColumns(group: TableColumnGroup): void {
+    const groupNames = group.columns.map((c) => c.qualifiedName);
+    this.selectedColumns = this.selectedColumns.filter((c) => !groupNames.includes(c));
     this.updateHavingConfig();
   }
 
@@ -192,69 +464,67 @@ export class App implements OnInit {
   public resetCalculatedColumnForm(): void {
     this.calcFormError = '';
     const numCols = this.numericColumns;
-    const allCols = this.availableColumns;
+    const allCols = this.allActiveColumns;
 
     this.rowNumAlias = `num_linha_${this.calculatedColumns.length + 1}`;
     this.rowNumPartitionBy = [];
-    this.rowNumOrderCol = allCols[0]?.name || '';
+    this.rowNumOrderCol = allCols[0]?.qualifiedName || '';
     this.rowNumOrderDir = 'ASC';
 
     this.aggFunc = 'sum';
-    this.aggCol = numCols[0]?.name || allCols[0]?.name || '';
-    this.aggConcatCols = [allCols[0]?.name || '', allCols[1]?.name || ''];
+    this.aggCol = numCols[0]?.qualifiedName || allCols[0]?.qualifiedName || '';
+    this.aggConcatCols = [allCols[0]?.qualifiedName || '', allCols[1]?.qualifiedName || ''];
     this.aggAlias = `total_${this.aggFunc}_${this.calculatedColumns.length + 1}`;
 
     this.mathOp = '+';
-    this.mathCol1 = numCols[0]?.name || allCols[0]?.name || '';
-    this.mathCol2 = numCols[1]?.name || allCols[1]?.name || allCols[0]?.name || '';
+    this.mathCol1 = numCols[0]?.qualifiedName || allCols[0]?.qualifiedName || '';
+    this.mathCol2 = numCols[1]?.qualifiedName || allCols[1]?.qualifiedName || allCols[0]?.qualifiedName || '';
     this.mathAlias = `calc_${this.calculatedColumns.length + 1}`;
   }
 
   public onAggFuncChange(): void {
     const numCols = this.numericColumns;
-    const allCols = this.availableColumns;
+    const allCols = this.allActiveColumns;
 
     if (this.aggFunc === 'sum' || this.aggFunc === 'avg') {
-      this.aggCol = numCols[0]?.name || allCols[0]?.name || '';
+      this.aggCol = numCols[0]?.qualifiedName || allCols[0]?.qualifiedName || '';
     } else if (this.aggFunc === 'concat') {
       if (this.aggConcatCols.length === 0) {
-        this.aggConcatCols = allCols.slice(0, 2).map((c) => c.name);
+        this.aggConcatCols = allCols.slice(0, 2).map((c) => c.qualifiedName);
       }
     } else {
-      this.aggCol = allCols[0]?.name || '';
+      this.aggCol = allCols[0]?.qualifiedName || '';
     }
-    this.aggAlias = `${this.aggFunc}_${this.aggCol || 'col'}`;
+    const cleanCol = this.aggCol ? this.aggCol.replace('.', '_') : 'col';
+    this.aggAlias = `${this.aggFunc}_${cleanCol}`;
   }
 
-  public togglePartitionBy(colName: string): void {
-    const idx = this.rowNumPartitionBy.indexOf(colName);
+  public togglePartitionBy(colQualified: string): void {
+    const idx = this.rowNumPartitionBy.indexOf(colQualified);
     if (idx > -1) {
       this.rowNumPartitionBy.splice(idx, 1);
     } else {
-      this.rowNumPartitionBy.push(colName);
+      this.rowNumPartitionBy.push(colQualified);
     }
   }
 
-  public isPartitionBySelected(colName: string): boolean {
-    return this.rowNumPartitionBy.includes(colName);
+  public isPartitionBySelected(colQualified: string): boolean {
+    return this.rowNumPartitionBy.includes(colQualified);
   }
 
-  public toggleConcatCol(colName: string): void {
-    const idx = this.aggConcatCols.indexOf(colName);
+  public toggleConcatCol(colQualified: string): void {
+    const idx = this.aggConcatCols.indexOf(colQualified);
     if (idx > -1) {
       this.aggConcatCols.splice(idx, 1);
     } else {
-      this.aggConcatCols.push(colName);
+      this.aggConcatCols.push(colQualified);
     }
   }
 
-  public isConcatColSelected(colName: string): boolean {
-    return this.aggConcatCols.includes(colName);
+  public isConcatColSelected(colQualified: string): boolean {
+    return this.aggConcatCols.includes(colQualified);
   }
 
-  /**
-   * Adiciona uma nova coluna calculada
-   */
   public addCalculatedColumn(): void {
     this.calcFormError = '';
 
@@ -350,9 +620,6 @@ export class App implements OnInit {
     }
   }
 
-  /**
-   * Remove uma coluna calculada
-   */
   public removeCalculatedColumn(index: number): void {
     this.calculatedColumns.splice(index, 1);
     this.updateHavingConfig();
@@ -361,9 +628,6 @@ export class App implements OnInit {
     }
   }
 
-  /**
-   * Atualiza a configuração do HAVING com base nas agregações ativas
-   */
   public updateHavingConfig(): void {
     if (!this.hasAggregations) {
       this.havingConfig = { fields: {} };
@@ -373,7 +637,6 @@ export class App implements OnInit {
 
     const fieldsConfig: Record<string, any> = {};
 
-    // Adiciona as colunas calculadas de agregação disponíveis para filtragem no HAVING
     for (const calc of this.calculatedColumns) {
       if (calc.tipo === 'agregacao') {
         const colLabel = calc.funcao === 'concat'
@@ -389,7 +652,6 @@ export class App implements OnInit {
 
     this.havingConfig = { fields: fieldsConfig };
 
-    // Se o HAVING ainda estiver vazio, inicializa com a primeira agregação disponível
     const aggKeys = Object.keys(fieldsConfig);
     if (aggKeys.length > 0 && (!this.havingQuery.rules || this.havingQuery.rules.length === 0)) {
       this.havingQuery = {
@@ -466,20 +728,29 @@ export class App implements OnInit {
 
     this.validationError = '';
 
+    const joinsPayload: QueryPayloadJoin[] = this.activeJoins.map((j) => ({
+      tipo: j.tipo,
+      tabela: j.tabelaDestino,
+      condicoes: j.condicoes.map((c) => ({
+        coluna_origem: c.colunaOrigem,
+        operador: c.operador || '=',
+        coluna_destino: c.colunaDestino
+      }))
+    }));
+
     const payload: QueryPayload = {
       tabela: this.selectedTableId,
+      ...(this.activeJoins.length > 0 ? { joins: joinsPayload } : {}),
       colunas: [...this.selectedColumns],
       filtros: JSON.parse(JSON.stringify(this.query)),
       limite: this.limit,
       geradoEm: new Date().toISOString()
     };
 
-    // Inclui colunas calculadas se houver
     if (this.calculatedColumns.length > 0) {
       payload.colunas_calculadas = JSON.parse(JSON.stringify(this.calculatedColumns));
     }
 
-    // Se houver agregações, inclui GROUP BY e HAVING
     if (this.hasAggregations) {
       payload.group_by = [...this.selectedColumns];
       if (this.havingQuery && this.havingQuery.rules && this.havingQuery.rules.length > 0) {

@@ -206,24 +206,93 @@ export class MetadataService {
     return this.tables.find((t) => t.id === id);
   }
 
-  getQueryBuilderConfig(tableId: string): QueryBuilderConfig {
-    const table = this.getTableById(tableId);
-    if (!table) {
-      return { fields: {} };
+  /**
+   * Retorna tabelas disponíveis para JOIN (exclui a tabela base e tabelas já adicionadas)
+   */
+  getAvailableJoinTables(baseTableId: string, currentJoinedTableIds: string[]): TableDefinition[] {
+    return this.tables.filter((t) => t.id !== baseTableId && !currentJoinedTableIds.includes(t.id));
+  }
+
+  /**
+   * Sugere chaves de junção inteligentes entre duas tabelas
+   */
+  getCommonJoinKeys(tableAId: string, tableBId: string): { colA: string; colB: string } {
+    if (
+      (tableAId === 'vendas_2023' && tableBId === 'clientes_ativos') ||
+      (tableAId === 'clientes_ativos' && tableBId === 'vendas_2023')
+    ) {
+      return { colA: `${tableAId}.cliente_id`, colB: `${tableBId}.cliente_id` };
     }
 
-    const fieldsConfig: Record<string, any> = {};
+    if (
+      (tableAId === 'vendas_2023' && tableBId === 'log_eventos') ||
+      (tableAId === 'log_eventos' && tableBId === 'vendas_2023')
+    ) {
+      const colA = tableAId === 'vendas_2023' ? 'cliente_id' : 'usuario_id';
+      const colB = tableBId === 'vendas_2023' ? 'cliente_id' : 'usuario_id';
+      return { colA: `${tableAId}.${colA}`, colB: `${tableBId}.${colB}` };
+    }
 
-    for (const col of table.columns) {
-      fieldsConfig[col.name] = {
-        name: `${col.label} (${col.name})`,
-        type: col.type,
-        options: col.options || []
-      };
+    if (
+      (tableAId === 'clientes_ativos' && tableBId === 'log_eventos') ||
+      (tableAId === 'log_eventos' && tableBId === 'clientes_ativos')
+    ) {
+      const colA = tableAId === 'clientes_ativos' ? 'cliente_id' : 'usuario_id';
+      const colB = tableBId === 'clientes_ativos' ? 'cliente_id' : 'usuario_id';
+      return { colA: `${tableAId}.${colA}`, colB: `${tableBId}.${colB}` };
+    }
+
+    // Default fallback
+    const tA = this.getTableById(tableAId);
+    const tB = this.getTableById(tableBId);
+    return {
+      colA: `${tableAId}.${tA?.columns[0]?.name || 'id'}`,
+      colB: `${tableBId}.${tB?.columns[0]?.name || 'id'}`
+    };
+  }
+
+  /**
+   * Constrói a configuração do QueryBuilder para uma única tabela
+   */
+  getQueryBuilderConfig(tableId: string): QueryBuilderConfig {
+    return this.getMultiTableQueryBuilderConfig([tableId]);
+  }
+
+  /**
+   * Constrói a configuração do QueryBuilder para múltiplas tabelas ativas (Base + JOINs)
+   */
+  getMultiTableQueryBuilderConfig(tableIds: string[]): QueryBuilderConfig {
+    const fieldsConfig: Record<string, any> = {};
+    const entitiesConfig: Record<string, any> = {};
+    const hasMultiple = tableIds.length > 1;
+
+    for (const tableId of tableIds) {
+      const table = this.getTableById(tableId);
+      if (!table) continue;
+
+      if (hasMultiple) {
+        entitiesConfig[tableId] = {
+          name: table.name
+        };
+      }
+
+      for (const col of table.columns) {
+        // Se houver múltiplas tabelas, qualificamos o nome: tabela.coluna
+        const fieldKey = hasMultiple ? `${tableId}.${col.name}` : col.name;
+        const prefix = hasMultiple ? `[${table.icon || '📊'} ${table.id}] ` : '';
+
+        fieldsConfig[fieldKey] = {
+          name: `${prefix}${col.label} (${col.name})`,
+          type: col.type,
+          options: col.options || [],
+          ...(hasMultiple ? { entity: tableId } : {})
+        };
+      }
     }
 
     return {
-      fields: fieldsConfig
+      fields: fieldsConfig,
+      ...(hasMultiple ? { entities: entitiesConfig } : {})
     };
   }
 }

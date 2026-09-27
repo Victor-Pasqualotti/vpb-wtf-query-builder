@@ -34,6 +34,18 @@ export class SqlPreviewService {
 
     const fromPart = payload.tabela || 'tabela_indefinida';
 
+    // JOINs clause
+    let joinsClause = '';
+    if (payload.joins && payload.joins.length > 0) {
+      const joinLines = payload.joins.map((j) => {
+        const onConditions = j.condicoes && j.condicoes.length > 0
+          ? j.condicoes.map((c) => `${c.coluna_origem} ${c.operador || '='} ${c.coluna_destino}`).join(' AND ')
+          : '1 = 1';
+        return `${j.tipo} ${j.tabela}\n  ON ${onConditions}`;
+      });
+      joinsClause = `\n${joinLines.join('\n')}`;
+    }
+
     // WHERE clause
     let whereClause = '';
     if (payload.filtros && payload.filtros.rules && payload.filtros.rules.length > 0) {
@@ -60,7 +72,7 @@ export class SqlPreviewService {
 
     const limitPart = payload.limite ? `\nLIMIT ${payload.limite}` : '\nLIMIT 100';
 
-    return `SELECT\n${selectClause}\nFROM\n  ${fromPart}${whereClause}${groupByClause}${havingClause}${limitPart};`;
+    return `SELECT\n${selectClause}\nFROM\n  ${fromPart}${joinsClause}${whereClause}${groupByClause}${havingClause}${limitPart};`;
   }
 
   private formatCalculatedColumn(calc: CalculatedColumn): string {

@@ -37,19 +37,19 @@
     <!-- Builder Form Card -->
     <div class="builder-card">
       
-      <!-- 1. ORIGEM DOS DADOS (FROM) -->
+      <!-- 1. ORIGEM DOS DADOS (FROM) & JORNADA DE JOINS -->
       <section class="section-block">
         <div class="section-header">
           <div class="section-number">1</div>
           <div class="section-title-wrap">
-            <h2 class="section-title">Origem dos Dados (FROM)</h2>
-            <p class="section-desc">Selecione o catálogo ou tabela do Athena que deseja consultar.</p>
+            <h2 class="section-title">Origem dos Dados (FROM) & Junções (JOIN)</h2>
+            <p class="section-desc">1. Selecione qual tabela será seu público de partida.</p>
           </div>
         </div>
 
         <div class="section-body">
           <div class="select-table-control">
-            <label for="tableSelect" class="form-label">Tabela de Origem:</label>
+            <label for="tableSelect" class="form-label">Tabela de Partida (Público Inicial):</label>
             <div class="custom-select-wrapper">
               <select 
                 id="tableSelect"
@@ -70,6 +70,156 @@
               <strong>{{ currentTable.columns.length }}</strong> colunas disponíveis
             </span>
           </div>
+
+          <!-- Pergunta 2: Deseja usar variáveis de outras tabelas? -->
+          <div class="join-question-box">
+            <div class="join-question-header">
+              <span class="question-icon">🔗</span>
+              <div class="question-text">
+                <span class="question-title">2. Deseja usar variáveis de outras tabelas?</span>
+                <span class="question-subtitle">Faça junção (JOIN) com outros conjuntos de dados para cruzar informações complementares.</span>
+              </div>
+            </div>
+
+            <div class="join-choice-toggle">
+              <label class="toggle-option" [class.active]="!wantsJoins">
+                <input 
+                  type="radio" 
+                  name="wantsJoinsRadio" 
+                  [checked]="!wantsJoins" 
+                  (change)="onWantsJoinsChange(false)" />
+                <span class="toggle-text">2.2 Não (Apenas tabela de partida)</span>
+              </label>
+
+              <label class="toggle-option" [class.active]="wantsJoins">
+                <input 
+                  type="radio" 
+                  name="wantsJoinsRadio" 
+                  [checked]="wantsJoins" 
+                  (change)="onWantsJoinsChange(true)" />
+                <span class="toggle-text">2.1 Sim (Configurar JOIN entre tabelas)</span>
+              </label>
+            </div>
+
+            <!-- 2.1 Painel de Configuração de JOIN -->
+            <div class="join-config-panel" *ngIf="wantsJoins">
+              
+              <!-- Formulário para adicionar um novo JOIN -->
+              <div class="add-join-box" *ngIf="availableJoinTables.length > 0">
+                <h4 class="join-form-title">Configurar Nova Junção (JOIN):</h4>
+                
+                <div class="join-form-grid">
+                  <div class="form-field">
+                    <label class="form-label" for="joinTypeSelect">Tipo de JOIN:</label>
+                    <select id="joinTypeSelect" class="form-select" [(ngModel)]="selectedJoinType">
+                      <option value="LEFT JOIN">LEFT JOIN (Mantém todos da esquerda)</option>
+                      <option value="INNER JOIN">INNER JOIN (Apenas correspondências exatas)</option>
+                    </select>
+                  </div>
+
+                  <div class="form-field">
+                    <label class="form-label" for="joinTargetTable">Tabela a Juntar:</label>
+                    <select 
+                      id="joinTargetTable" 
+                      class="form-select" 
+                      [(ngModel)]="selectedJoinTableId" 
+                      (ngModelChange)="onJoinTargetTableChange()">
+                      <option *ngFor="let t of availableJoinTables" [value]="t.id">
+                        {{ t.icon }} {{ t.name }}
+                      </option>
+                    </select>
+                  </div>
+                </div>
+
+                <!-- Método de Junção ON (uma ou mais colunas) -->
+                <div class="join-on-conditions">
+                  <label class="form-label">Condição de Junção (ON uma ou mais colunas):</label>
+                  
+                  <div class="on-condition-row" *ngFor="let cond of currentJoinConditions; let i = index">
+                    <div class="on-select-wrap">
+                      <span class="col-table-prefix">{{ selectedTableId }}:</span>
+                      <select class="form-select" [(ngModel)]="cond.colunaOrigem">
+                        <option *ngFor="let c of getColumnsForTable(selectedTableId)" [value]="selectedTableId + '.' + c.name">
+                          {{ c.label }} ({{ c.name }})
+                        </option>
+                      </select>
+                    </div>
+
+                    <span class="on-operator">=</span>
+
+                    <div class="on-select-wrap">
+                      <span class="col-table-prefix">{{ selectedJoinTableId }}:</span>
+                      <select class="form-select" [(ngModel)]="cond.colunaDestino">
+                        <option *ngFor="let c of getColumnsForTable(selectedJoinTableId)" [value]="selectedJoinTableId + '.' + c.name">
+                          {{ c.label }} ({{ c.name }})
+                        </option>
+                      </select>
+                    </div>
+
+                    <button 
+                      type="button" 
+                      class="btn-remove-cond" 
+                      *ngIf="currentJoinConditions.length > 1"
+                      (click)="removeJoinCondition(i)" 
+                      title="Remover condição">
+                      ✕
+                    </button>
+                  </div>
+
+                  <div class="on-conditions-actions">
+                    <button type="button" class="btn-sm btn-ghost" (click)="addJoinCondition()">
+                      + Adicionar outra condição ON (AND)
+                    </button>
+                  </div>
+                </div>
+
+                <div *ngIf="joinFormError" class="form-inline-error">
+                  ⚠️ {{ joinFormError }}
+                </div>
+
+                <div class="add-join-btn-row">
+                  <button type="button" class="btn-sm btn-apply-join" (click)="addJoin()">
+                    ✓ Adicionar JOIN à Consulta
+                  </button>
+                </div>
+              </div>
+
+              <!-- Mensagem quando não há mais tabelas disponíveis -->
+              <div class="no-more-joins-info" *ngIf="availableJoinTables.length === 0 && activeJoins.length > 0">
+                Todas as tabelas do catálogo já foram adicionadas à consulta.
+              </div>
+
+              <!-- Lista de JOINs Ativos -->
+              <div class="active-joins-list" *ngIf="activeJoins.length > 0">
+                <h5 class="active-joins-title">JOINs Configurados ({{ activeJoins.length }}):</h5>
+                
+                <div class="join-cards-stack">
+                  <div class="active-join-card" *ngFor="let join of activeJoins; let idx = index">
+                    <div class="join-card-header">
+                      <span class="join-type-badge" [class.badge-inner]="join.tipo === 'INNER JOIN'">
+                        {{ join.tipo }}
+                      </span>
+                      <strong class="join-target-name">{{ join.tabelaDestino }}</strong>
+                      <button 
+                        type="button" 
+                        class="btn-remove-join" 
+                        (click)="removeJoin(idx)" 
+                        title="Remover este JOIN">
+                        ✕ Remover
+                      </button>
+                    </div>
+                    
+                    <div class="join-card-conditions">
+                      <div class="condition-item" *ngFor="let c of join.condicoes">
+                        <code>ON {{ c.colunaOrigem }} = {{ c.colunaDestino }}</code>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          </div>
         </div>
       </section>
 
@@ -79,7 +229,9 @@
           <div class="section-number">2</div>
           <div class="section-title-wrap">
             <h2 class="section-title">Colunas da Consulta (SELECT)</h2>
-            <p class="section-desc">Escolha as colunas que farão parte da projeção. Evite <code>SELECT *</code> para otimizar a cobrança por scan de colunas colunares (Parquet/ORC).</p>
+            <p class="section-desc">
+              Escolha as colunas de <strong>todas as tabelas do JOIN</strong> que farão parte da consulta.
+            </p>
           </div>
         </div>
 
@@ -88,7 +240,7 @@
           <div class="columns-toolbar">
             <div class="selection-counter">
               <span class="count-badge" [class.count-empty]="selectedColumns.length === 0">
-                {{ selectedColumns.length }} de {{ availableColumns.length }} colunas selecionadas
+                {{ selectedColumns.length }} de {{ allActiveColumns.length }} colunas selecionadas
               </span>
               <span *ngIf="hasAggregations" class="badge-group-by-active">
                 ⚡ GROUP BY Ativo nas colunas selecionadas
@@ -104,26 +256,49 @@
             </div>
           </div>
 
-          <!-- Columns Chips / Checkboxes Grid -->
-          <div class="columns-grid">
-            <label 
-              *ngFor="let col of availableColumns" 
-              class="column-chip"
-              [class.selected]="isColumnSelected(col.name)">
-              <input 
-                type="checkbox" 
-                class="column-checkbox"
-                [checked]="isColumnSelected(col.name)"
-                (change)="toggleColumn(col.name)" />
-              <div class="column-details">
-                <span class="col-name">{{ col.label }}</span>
-                <span class="col-meta">
-                  <code>{{ col.name }}</code>
-                  <span class="type-tag type-{{ col.type }}">{{ col.type }}</span>
-                </span>
+          <!-- Grupos de Colunas por Tabela (Tabela Base + JOINs) -->
+          <div class="table-columns-groups-stack">
+            <div class="table-group-box" *ngFor="let group of activeTableGroups">
+              <div class="table-group-header">
+                <div class="group-title-info">
+                  <span class="table-icon">{{ group.table.icon || '📊' }}</span>
+                  <span class="group-table-name">{{ group.table.name }}</span>
+                  <span class="table-role-tag" *ngIf="group.isBase">Público de Partida</span>
+                  <span class="table-role-tag join-tag" *ngIf="!group.isBase">{{ group.joinType }}</span>
+                </div>
+                <div class="group-actions">
+                  <button type="button" class="btn-xs btn-ghost" (click)="selectAllTableColumns(group)">
+                    Todas desta tabela
+                  </button>
+                  <button type="button" class="btn-xs btn-ghost" (click)="clearTableColumns(group)">
+                    Limpar
+                  </button>
+                </div>
               </div>
-            </label>
+
+              <!-- Columns Chips / Checkboxes Grid -->
+              <div class="columns-grid">
+                <label 
+                  *ngFor="let col of group.columns" 
+                  class="column-chip"
+                  [class.selected]="isColumnSelected(col.qualifiedName)">
+                  <input 
+                    type="checkbox" 
+                    class="column-checkbox"
+                    [checked]="isColumnSelected(col.qualifiedName)"
+                    (change)="toggleColumn(col.qualifiedName)" />
+                  <div class="column-details">
+                    <span class="col-name">{{ col.label }}</span>
+                    <span class="col-meta">
+                      <code>{{ col.qualifiedName }}</code>
+                      <span class="type-tag type-{{ col.type }}">{{ col.type }}</span>
+                    </span>
+                  </div>
+                </label>
+              </div>
+            </div>
           </div>
+
         </div>
       </section>
 
@@ -134,12 +309,10 @@
           <div class="section-title-wrap">
             <div class="badge-title-group">
               <h2 class="section-title">Colunas Calculadas (Expressions & Window Functions)</h2>
-              <span class="badge badge-feature">Novo</span>
+              <span class="badge badge-feature">Multi-Tabela</span>
             </div>
             <p class="section-desc">
-              Adicione métricas derivadas, funções de janela (<strong>Row Number</strong> com Partition By/Order By), 
-              <strong>Agregações</strong> (Sum, Avg, Min, Max, Count, Concat) que exigem GROUP BY e habilitam HAVING, 
-              ou <strong>Operações Matemáticas</strong> (+, -, =).
+              Crie métricas derivadas utilizando colunas de <strong>qualquer tabela ativa no JOIN</strong> (Row Number, Agregações com GROUP BY/HAVING ou Operações Matemáticas).
             </p>
           </div>
         </div>
@@ -191,8 +364,8 @@
                 <label class="form-label" for="rowNumOrderCol">Ordenar Por (ORDER BY):</label>
                 <div class="order-inputs-row">
                   <select id="rowNumOrderCol" class="form-select" [(ngModel)]="rowNumOrderCol">
-                    <option *ngFor="let col of availableColumns" [value]="col.name">
-                      {{ col.label }} ({{ col.name }})
+                    <option *ngFor="let col of allActiveColumns" [value]="col.qualifiedName">
+                      {{ col.label }} ({{ col.qualifiedName }})
                     </option>
                   </select>
                   <select class="form-select dir-select" [(ngModel)]="rowNumOrderDir">
@@ -207,12 +380,12 @@
                 <div class="chips-selector">
                   <button 
                     type="button" 
-                    *ngFor="let col of availableColumns"
+                    *ngFor="let col of allActiveColumns"
                     class="mini-chip"
-                    [class.selected]="isPartitionBySelected(col.name)"
-                    (click)="togglePartitionBy(col.name)">
-                    <span class="chip-check" *ngIf="isPartitionBySelected(col.name)">✓</span>
-                    {{ col.label }}
+                    [class.selected]="isPartitionBySelected(col.qualifiedName)"
+                    (click)="togglePartitionBy(col.qualifiedName)">
+                    <span class="chip-check" *ngIf="isPartitionBySelected(col.qualifiedName)">✓</span>
+                    {{ col.label }} ({{ col.qualifiedName }})
                   </button>
                 </div>
               </div>
@@ -241,8 +414,8 @@
               <div class="form-field" *ngIf="aggFunc !== 'concat'">
                 <label class="form-label" for="aggCol">Coluna Alvo:</label>
                 <select id="aggCol" class="form-select" [(ngModel)]="aggCol" (ngModelChange)="onAggFuncChange()">
-                  <option *ngFor="let col of availableColumns" [value]="col.name">
-                    {{ col.label }} ({{ col.name }})
+                  <option *ngFor="let col of allActiveColumns" [value]="col.qualifiedName">
+                    {{ col.label }} ({{ col.qualifiedName }})
                   </option>
                 </select>
               </div>
@@ -252,12 +425,12 @@
                 <div class="chips-selector">
                   <button 
                     type="button" 
-                    *ngFor="let col of availableColumns"
+                    *ngFor="let col of allActiveColumns"
                     class="mini-chip"
-                    [class.selected]="isConcatColSelected(col.name)"
-                    (click)="toggleConcatCol(col.name)">
-                    <span class="chip-check" *ngIf="isConcatColSelected(col.name)">✓</span>
-                    {{ col.label }}
+                    [class.selected]="isConcatColSelected(col.qualifiedName)"
+                    (click)="toggleConcatCol(col.qualifiedName)">
+                    <span class="chip-check" *ngIf="isConcatColSelected(col.qualifiedName)">✓</span>
+                    {{ col.label }} ({{ col.qualifiedName }})
                   </button>
                 </div>
               </div>
@@ -277,14 +450,14 @@
           <!-- Form: Operações Matemáticas -->
           <div class="calc-form-box" *ngIf="calcType === 'operacao'">
             <div class="form-instructions">
-              <strong>Operações Matemáticas ou de Comparação:</strong> Realiza cálculos ou comparações entre duas colunas (ex: <code>coluna_a - coluna_b</code> ou <code>coluna_a = coluna_b</code>).
+              <strong>Operações Matemáticas ou de Comparação:</strong> Realiza cálculos ou comparações entre colunas (mesma tabela ou entre tabelas do JOIN).
             </div>
             <div class="calc-form-grid">
               <div class="form-field">
                 <label class="form-label" for="mathCol1">Primeira Coluna:</label>
                 <select id="mathCol1" class="form-select" [(ngModel)]="mathCol1">
-                  <option *ngFor="let col of availableColumns" [value]="col.name">
-                    {{ col.label }} ({{ col.name }})
+                  <option *ngFor="let col of allActiveColumns" [value]="col.qualifiedName">
+                    {{ col.label }} ({{ col.qualifiedName }})
                   </option>
                 </select>
               </div>
@@ -301,8 +474,8 @@
               <div class="form-field">
                 <label class="form-label" for="mathCol2">Segunda Coluna:</label>
                 <select id="mathCol2" class="form-select" [(ngModel)]="mathCol2">
-                  <option *ngFor="let col of availableColumns" [value]="col.name">
-                    {{ col.label }} ({{ col.name }})
+                  <option *ngFor="let col of allActiveColumns" [value]="col.qualifiedName">
+                    {{ col.label }} ({{ col.qualifiedName }})
                   </option>
                 </select>
               </div>
@@ -363,7 +536,9 @@
           <div class="section-number">3</div>
           <div class="section-title-wrap">
             <h2 class="section-title">Filtros e Condições (WHERE)</h2>
-            <p class="section-desc">Construa regras lógicas condicionais simples ou agrupadas (AND / OR) sobre a tabela <code>{{ selectedTableId }}</code>.</p>
+            <p class="section-desc">
+              Construa regras lógicas condicionais simples ou agrupadas (AND / OR) sobre <strong>todas as tabelas da consulta</strong>.
+            </p>
           </div>
         </div>
 
@@ -520,7 +695,7 @@
         </div>
 
         <div class="output-desc-bar">
-          Este objeto JSON representa a árvore de intenções da consulta (AST) com suporte a colunas calculadas, GROUP BY e HAVING. Ele é enviado pela SPA para o AWS API Gateway e processado pela função Lambda em Python para gerar o SQL Trino/Athena seguro.
+          Este objeto JSON representa a árvore de intenções da consulta (AST) com suporte a múltiplos JOINs (LEFT/INNER), colunas calculadas, GROUP BY e HAVING. Ele é enviado pela SPA para o AWS API Gateway e processado pela função Lambda em Python para gerar o SQL Trino/Athena seguro.
         </div>
 
         <!-- JSON Code View -->
