@@ -1,0 +1,298 @@
+<div class="app-layout">
+  <!-- Top Navigation / Header -->
+  <header class="top-nav">
+    <div class="container nav-content">
+      <div class="brand">
+        <div class="brand-logo">
+          <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
+          </svg>
+        </div>
+        <div>
+          <h1 class="brand-title">Athena Visual Query Builder</h1>
+          <p class="brand-subtitle">Construa consultas analíticas sem SQL &bull; Otimizado para AWS Athena</p>
+        </div>
+      </div>
+      <div class="header-badges">
+        <span class="badge badge-aws">AWS Athena / Trino</span>
+        <span class="badge badge-cost">Data Scan Safe</span>
+        <span class="badge badge-ast">JSON AST Mode</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content Container -->
+  <main class="container main-content">
+    
+    <!-- Athena Cost Awareness Alert -->
+    <div class="cost-alert-card">
+      <div class="alert-icon">💡</div>
+      <div class="alert-body">
+        <strong>Boas práticas para AWS Athena:</strong>
+        O Athena cobra por gigabyte de dados escaneados no Amazon S3. 
+        Selecione apenas as colunas essenciais, aplique filtros específicos e mantenha o limite controlado para reduzir custos e acelerar os relatórios.
+      </div>
+    </div>
+
+    <!-- Builder Form Card -->
+    <div class="builder-card">
+      
+      <!-- 1. ORIGEM DOS DADOS (FROM) -->
+      <section class="section-block">
+        <div class="section-header">
+          <div class="section-number">1</div>
+          <div class="section-title-wrap">
+            <h2 class="section-title">Origem dos Dados (FROM)</h2>
+            <p class="section-desc">Selecione o catálogo ou tabela do Athena que deseja consultar.</p>
+          </div>
+        </div>
+
+        <div class="section-body">
+          <div class="select-table-control">
+            <label for="tableSelect" class="form-label">Tabela de Origem:</label>
+            <div class="custom-select-wrapper">
+              <select 
+                id="tableSelect"
+                class="form-select"
+                [ngModel]="selectedTableId"
+                (ngModelChange)="onTableChange($event)">
+                <option *ngFor="let tbl of tables" [value]="tbl.id">
+                  {{ tbl.icon }} {{ tbl.name }}
+                </option>
+              </select>
+            </div>
+          </div>
+
+          <div class="table-info-pill" *ngIf="currentTable">
+            <span class="info-label">Descrição:</span>
+            <span class="info-text">{{ currentTable.description }}</span>
+            <span class="info-columns-count">
+              <strong>{{ currentTable.columns.length }}</strong> colunas disponíveis
+            </span>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2. COLUNAS (SELECT) -->
+      <section class="section-block">
+        <div class="section-header">
+          <div class="section-number">2</div>
+          <div class="section-title-wrap">
+            <h2 class="section-title">Colunas da Consulta (SELECT)</h2>
+            <p class="section-desc">Escolha as colunas que farão parte da projeção. Evite <code>SELECT *</code> para otimizar a cobrança por scan de colunas colunares (Parquet/ORC).</p>
+          </div>
+        </div>
+
+        <div class="section-body">
+          <!-- Selection Toolbar -->
+          <div class="columns-toolbar">
+            <div class="selection-counter">
+              <span class="count-badge" [class.count-empty]="selectedColumns.length === 0">
+                {{ selectedColumns.length }} de {{ availableColumns.length }} colunas selecionadas
+              </span>
+            </div>
+            <div class="toolbar-actions">
+              <button type="button" class="btn-sm btn-ghost" (click)="selectAllColumns()">
+                ✓ Selecionar Todas
+              </button>
+              <button type="button" class="btn-sm btn-ghost" (click)="clearAllColumns()">
+                ✕ Limpar
+              </button>
+            </div>
+          </div>
+
+          <!-- Columns Chips / Checkboxes Grid -->
+          <div class="columns-grid">
+            <label 
+              *ngFor="let col of availableColumns" 
+              class="column-chip"
+              [class.selected]="isColumnSelected(col.name)">
+              <input 
+                type="checkbox" 
+                class="column-checkbox"
+                [checked]="isColumnSelected(col.name)"
+                (change)="toggleColumn(col.name)" />
+              <div class="column-details">
+                <span class="col-name">{{ col.label }}</span>
+                <span class="col-meta">
+                  <code>{{ col.name }}</code>
+                  <span class="type-tag type-{{ col.type }}">{{ col.type }}</span>
+                </span>
+              </div>
+            </label>
+          </div>
+        </div>
+      </section>
+
+      <!-- 3. FILTROS (WHERE) -->
+      <section class="section-block">
+        <div class="section-header">
+          <div class="section-number">3</div>
+          <div class="section-title-wrap">
+            <h2 class="section-title">Filtros e Condições (WHERE)</h2>
+            <p class="section-desc">Construa regras lógicas condicionais simples ou agrupadas (AND / OR) sobre a tabela <code>{{ selectedTableId }}</code>.</p>
+          </div>
+        </div>
+
+        <div class="section-body">
+          <div class="query-builder-container">
+            <query-builder 
+              [config]="queryConfig" 
+              [(ngModel)]="query"
+              [allowRuleset]="true"
+              [allowCollapse]="false">
+            </query-builder>
+          </div>
+        </div>
+      </section>
+
+      <!-- 4. LIMITE DE RESULTADOS (LIMIT) -->
+      <section class="section-block">
+        <div class="section-header">
+          <div class="section-number">4</div>
+          <div class="section-title-wrap">
+            <h2 class="section-title">Limite de Resultados (LIMIT)</h2>
+            <p class="section-desc">Limite de linhas retornadas pelo AWS Athena (Padrão: 100, Máximo: 1.000).</p>
+          </div>
+        </div>
+
+        <div class="section-body">
+          <div class="limit-input-group">
+            <div class="input-with-label">
+              <label for="limitInput" class="form-label">Quantidade de Linhas:</label>
+              <div class="number-input-wrap">
+                <input 
+                  id="limitInput"
+                  type="number" 
+                  class="form-input number-input"
+                  [(ngModel)]="limit" 
+                  (blur)="enforceLimitBounds()"
+                  [min]="minLimit" 
+                  [max]="maxLimit" 
+                  step="10" />
+                <span class="input-suffix">linhas</span>
+              </div>
+            </div>
+
+            <!-- Quick Preset Buttons -->
+            <div class="limit-presets">
+              <span class="presets-label">Atalhos rápidos:</span>
+              <button 
+                type="button" 
+                class="preset-btn" 
+                [class.active]="limit === 50"
+                (click)="limit = 50">50</button>
+              <button 
+                type="button" 
+                class="preset-btn" 
+                [class.active]="limit === 100"
+                (click)="limit = 100">100</button>
+              <button 
+                type="button" 
+                class="preset-btn" 
+                [class.active]="limit === 250"
+                (click)="limit = 250">250</button>
+              <button 
+                type="button" 
+                class="preset-btn" 
+                [class.active]="limit === 500"
+                (click)="limit = 500">500</button>
+              <button 
+                type="button" 
+                class="preset-btn" 
+                [class.active]="limit === 1000"
+                (click)="limit = 1000">1000</button>
+            </div>
+          </div>
+          <p class="limit-help-text">
+            O teto de 1.000 registros evita estouro de memória no navegador e downloads desnecessários na AWS.
+          </p>
+        </div>
+      </section>
+
+      <!-- 5. AÇÃO (BOTÃO GERAR PAYLOAD) -->
+      <section class="section-action">
+        <div *ngIf="validationError" class="validation-alert">
+          ⚠️ {{ validationError }}
+        </div>
+
+        <div class="action-buttons-row">
+          <button 
+            type="button" 
+            class="btn-primary btn-generate" 
+            (click)="generatePayload()">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+            </svg>
+            Gerar Payload
+          </button>
+        </div>
+      </section>
+
+    </div>
+
+    <!-- 5. SAÍDA (PAYLOAD JSON & SQL PREVIEW) -->
+    <div class="output-container" *ngIf="generatedPayload">
+      <div class="output-card">
+        
+        <!-- Output Header -->
+        <div class="output-header">
+          <div class="output-title-group">
+            <span class="status-indicator"></span>
+            <h3 class="output-title">Payload JSON Estruturado (AST)</h3>
+            <span class="timestamp-tag">Gerado em {{ generatedPayload.geradoEm | date:'HH:mm:ss' }}</span>
+          </div>
+
+          <div class="output-actions">
+            <button 
+              type="button" 
+              class="btn-secondary" 
+              (click)="copyPayloadToClipboard()">
+              <span *ngIf="!copyFeedback">📋 Copiar JSON</span>
+              <span *ngIf="copyFeedback" class="copied-text">✓ Copiado!</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="output-desc-bar">
+          Este objeto JSON representa a árvore de intenções da consulta (AST). Ele é enviado pela SPA para o AWS API Gateway e processado pela função Lambda em Python para gerar o SQL Trino/Athena seguro.
+        </div>
+
+        <!-- JSON Code View -->
+        <div class="code-view-wrapper">
+          <pre class="code-block json-block"><code>{{ generatedPayload | json }}</code></pre>
+        </div>
+
+        <!-- SQL Athena/Trino Preview (Para validação do Analista de Negócios) -->
+        <div class="sql-preview-section">
+          <div class="sql-header">
+            <div class="sql-title-group">
+              <span class="sql-icon">⚙️</span>
+              <h4 class="sql-title">Preview SQL compilado (Athena / Trino)</h4>
+            </div>
+            <button 
+              type="button" 
+              class="btn-sm btn-ghost" 
+              (click)="copySqlToClipboard()">
+              <span *ngIf="!copySqlFeedback">Copiar SQL</span>
+              <span *ngIf="copySqlFeedback" class="copied-text">✓ SQL Copiado!</span>
+            </button>
+          </div>
+          <div class="code-view-wrapper">
+            <pre class="code-block sql-block"><code>{{ sqlPreview }}</code></pre>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Footer -->
+  <footer class="app-footer">
+    <div class="container footer-content">
+      <span>AWS Athena Visual Query Builder &bull; Arquitetura SPA Angular + AWS API Gateway + Lambda Python</span>
+      <span>Segurança: Sem SQL raw no front-end &bull; Parser centralizado no backend</span>
+    </div>
+  </footer>
+</div>

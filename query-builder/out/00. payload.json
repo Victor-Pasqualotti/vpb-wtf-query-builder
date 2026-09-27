@@ -1,0 +1,36 @@
+{
+  "tabela": "vendas_2023",
+  "colunas": [
+    "venda_id",
+    "cliente_id",
+    "valor_total",
+    "data_compra"
+  ],
+  "filtros": {
+    "condition": "and",
+    "rules": [
+      {
+        "field": "data_compra",
+        "operator": ">=",
+        "value": "2026-09-01"
+      },
+      {
+        "condition": "and",
+        "rules": [
+          {
+            "field": "valor_total",
+            "operator": ">",
+            "value": 100
+          },
+          {
+            "field": "canal_venda",
+            "operator": "=",
+            "value": "app_mobile"
+          }
+        ]
+      }
+    ]
+  },
+  "limite": 250,
+  "geradoEm": "2026-09-27T15:17:50.085Z"
+}
